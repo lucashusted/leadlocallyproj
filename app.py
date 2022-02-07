@@ -4,6 +4,7 @@
 #from urllib.request import urlopen
 #import os; os.chdir('/Users/whiskey/Desktop/johnproj')
 #import json
+import os
 import pandas as pd
 import plotly.express as px
 import numpy as np
@@ -14,6 +15,8 @@ import dash
 from dash import dash_table, dcc, html
 from dash.dependencies import Input, Output, State
 import dash_bootstrap_components as dbc
+
+first_time = False # this reloads some of the raw data files. should be turned off for deployment
 
 ## variable to use for heatmap for the project scatterplot
 projrank = 'CO2e tpy'
@@ -86,19 +89,24 @@ sum_table_cols = {
 # =============================================================================
 # Bringing in Data on Counties
 # =============================================================================
-state_names = pd.read_csv('data/state_names.txt',sep='\t',
+state_names = pd.read_csv(os.path.join('data','state_names.txt'),sep='\t',
                           names=['state_name','state_abbrev','state_fips'],dtype=str)
 state_names = state_names.apply(lambda x: x.str.strip()) # get rid of trailing spaces
 
-counties = gpd.read_file('data/cb_2018_us_county_5m')
+counties = gpd.read_file(os.path.join('data','cb_2018_us_county_5m'))
 counties = counties.merge(state_names,
                           right_on='state_fips',
                           left_on='STATEFP',
                           how='left')
 
 # TO CHANGE BUT FOR NOW DF IS WHERE ALL THE SCORES AND CENSUS DATA SHOULD BE BY COUNTY
-df = pd.read_excel('data/Final Aggregations (County_District_City Levels).xlsx',
-                   sheet_name='County')
+if first_time:
+    df = pd.read_excel(os.path.join('data','Final Aggregations (County_District_City Levels).xlsx'),
+                       sheet_name='County')
+    df.to_csv(os.path.join('data','final_aggregations.csv'),index=False)
+else:
+    df = pd.read_csv(os.path.join('data','final_aggregations.csv'))
+
 df.county_geoid = df.county_geoid.astype(str).str.zfill(5) # getting 5 digit fips thing
 df.loc[:,'civis_registered_ratio'] = df.civis_registered_count.divide(
     df.civis_registered_count+df.civis_unregistered_count
@@ -163,15 +171,22 @@ default_sum_table = pd.DataFrame(zip(sumtab.columns,[np.nan]*(len(sumtab.columns
 # =============================================================================
 # Making States from Counties and Adding Rank
 # =============================================================================
-#state_list = counties.state_name.sort_values().dropna().unique()
 
-states = counties.copy()
-states.loc[:,'statepop'] = states.groupby('state_abbrev').pop2012.transform(sum)
+# run the first time:
+if first_time:
+    states = counties.copy()
+    states.loc[:,'statepop'] = states.groupby('state_abbrev').pop2012.transform(sum)
 
-for ii in partisan_scores.values():
-    states.loc[:,ii] = states.loc[:,ii]*(states.pop2012/states.statepop)
+    for ii in partisan_scores.values():
+        states.loc[:,ii] = states.loc[:,ii]*(states.pop2012/states.statepop)
 
-states = states.dissolve('state_abbrev',aggfunc='sum')
+    states = states.dissolve('state_abbrev',aggfunc='sum')
+    states.to_file(os.path.join('data','states_shapefile.geojson'),driver='GeoJSON')
+else:
+    states = gpd.read_file(os.path.join('data','states_shapefile.geojson'))
+    states = states.set_index('state_abbrev')
+
+
 states.loc[:,'placename'] = states.index.map(
     state_names.set_index('state_abbrev').state_name.to_dict()
     ) # get the state names for graphing later
@@ -202,7 +217,7 @@ statedict = states.placename.to_dict()
 # =============================================================================
 # Getting the Projects and Labels Ready for the Scatterplot
 # =============================================================================
-projects = pd.read_csv('data/projects.csv')
+projects = pd.read_csv(os.path.join('data','projects.csv'))
 projects = projects.assign(clicktype='project')
 projects.loc[:,'placename'] = projects.City.str.title()+', '+projects.State
 
@@ -265,22 +280,85 @@ statedropdown = (
 
 # get the centers of each state in the dataframe that way we can navigate accordingly from dropdown
 
-statecenters = states.centroid.apply(lambda x: {"lat": x.y, "lon": x.x}).to_dict()
+if first_time:
+    statecenters = states.centroid.apply(lambda x: {"lat": x.y, "lon": x.x}).to_dict()
+else:
 
-# determining zoom dynamically
-sizerank = states.area.rank().to_frame('sizerank')
-sizerank.loc[:,'zoom'] = np.where(sizerank.sizerank>51,3,
-                            np.where(sizerank.sizerank>45,4,
-                                np.where(sizerank.sizerank>20,5,
-                                    np.where(sizerank.sizerank>1,6,10))))
-sizerank = sizerank.zoom.to_dict()
+    statecenters = {
+        'AK': {'lat': 64.19864536710269, 'lon': -152.21161373123448},
+        'AL': {'lat': 32.788821784191406, 'lon': -86.82877413163206},
+        'AR': {'lat': 34.899871241215195, 'lon': -92.43906311821542},
+        'AZ': {'lat': 34.293211150058774, 'lon': -111.66463907125058},
+        'CA': {'lat': 37.24595553055764, 'lon': -119.6105602159633},
+        'CO': {'lat': 38.998545515111005, 'lon': -105.54781469615011},
+        'CT': {'lat': 41.62015672684962, 'lon': -72.72640117314178},
+        'DE': {'lat': 38.99204548882909, 'lon': -75.50028373711518},
+        'FL': {'lat': 28.62041492098466, 'lon': -82.4976752864272},
+        'GA': {'lat': 32.649094738788925, 'lon': -83.44596500320112},
+        'HI': {'lat': 20.253115080067484, 'lon': -156.35292733138635},
+        'IA': {'lat': 42.07462719278254, 'lon': -93.50006506707614},
+        'ID': {'lat': 44.38909223490469, 'lon': -114.65935747329844},
+        'IL': {'lat': 40.06500169852606, 'lon': -89.19842354739647},
+        'IN': {'lat': 39.908136731062775, 'lon': -86.27562549855642},
+        'KS': {'lat': 38.48469938007203, 'lon': -98.38021614182924},
+        'KY': {'lat': 37.52665629171558, 'lon': -85.29056855164151},
+        'LA': {'lat': 31.048494726639834, 'lon': -91.97325322252993},
+        'MA': {'lat': 42.25228990949808, 'lon': -71.79509897430427},
+        'MD': {'lat': 39.03126992444781, 'lon': -76.76631772288249},
+        'ME': {'lat': 45.35981779141607, 'lon': -69.2228910889948},
+        'MI': {'lat': 44.352476289297314, 'lon': -85.4359147179878},
+        'MN': {'lat': 46.316596102870975, 'lon': -94.30876357721999},
+        'MO': {'lat': 38.36765846221201, 'lon': -92.47742457510007},
+        'MS': {'lat': 32.74881844210886, 'lon': -89.66427750479697},
+        'MT': {'lat': 47.033485201447306, 'lon': -109.64511961499808},
+        'NC': {'lat': 35.53968516211722, 'lon': -79.3564149890917},
+        'ND': {'lat': 47.4463027225088, 'lon': -100.46931085379893},
+        'NE': {'lat': 41.52714971186757, 'lon': -99.81084819475505},
+        'NH': {'lat': 43.68574513468267, 'lon': -71.57766142933251},
+        'NJ': {'lat': 40.18412844815561, 'lon': -74.6609056712226},
+        'NM': {'lat': 34.421363236533026, 'lon': -106.10837614027254},
+        'NV': {'lat': 39.35643474393468, 'lon': -116.65538515310705},
+        'NY': {'lat': 42.940175281697854, 'lon': -75.5026176732071},
+        'OH': {'lat': 40.29355614307442, 'lon': -82.79018130968092},
+        'OK': {'lat': 35.58354797116435, 'lon': -97.50843879290386},
+        'OR': {'lat': 43.936662110767834, 'lon': -120.55516902274762},
+        'PA': {'lat': 40.87388911264181, 'lon': -77.79960395647934},
+        'RI': {'lat': 41.67579888419362, 'lon': -71.55273840814883},
+        'SC': {'lat': 33.907636549324906, 'lon': -80.89581622723576},
+        'SD': {'lat': 44.43613089653848, 'lon': -100.23044797642653},
+        'TN': {'lat': 35.84297953256935, 'lon': -86.34335390283998},
+        'TX': {'lat': 31.482595722807783, 'lon': -99.34939812991959},
+        'UT': {'lat': 39.32378886224561, 'lon': -111.67820486515588},
+        'VA': {'lat': 37.51527475300566, 'lon': -78.80826455850163},
+        'VT': {'lat': 44.075198510023924, 'lon': -72.66271933121298},
+        'WA': {'lat': 47.38228437070144, 'lon': -120.45086015401435},
+        'WI': {'lat': 44.639490186969255, 'lon': -90.01147527784497},
+        'WV': {'lat': 38.642527095365274, 'lon': -80.61383728857619},
+        'WY': {'lat': 42.99964887765216, 'lon': -107.55147723016859}
+    }
 
 
-# =============================================================================
+if first_time:
+    # determining zoom dynamically (HARD CODED AFTER FIRST RUN)
+    sizerank = states.area.rank().to_frame('sizerank')
+    sizerank.loc[:,'zoom'] = np.where(sizerank.sizerank>51,3,
+                                np.where(sizerank.sizerank>45,4,
+                                    np.where(sizerank.sizerank>20,5,
+                                        np.where(sizerank.sizerank>1,6,10))))
+    sizerank = sizerank.zoom.to_dict()
+else:
+    sizerank = {'AK':4,'AL':5,'AR':5,'AZ':5,'CA':4,'CO':5,'CT':6,'DE':6,'FL':5,'GA':5,'HI':6,
+    'IA':5,'ID':5,'IL':5,'IN':6,'KS':5,'KY':6,'LA':6,'MA':6,'MD':6,'ME':6,'MI':5,'MN':5,'MO':5,
+    'MS':6,'MT':4,'NC':5,'ND':5,'NE':5,'NH':6,'NJ':6,'NM':4,'NV':5,'NY':5,'OH':6,'OK':5,'OR':5,
+    'PA':6,'RI':10,'SC':6,'SD':5,'TN':6,'TX':4,'UT':5,'VA':6,'VT':6,'WA':5,'WI':5,
+    'WV':6,'WY':5}
+
+
+
 # The App Layout Elements
 # =============================================================================
 #app = JupyterDash(__name__)
-app = dash.Dash(__name__,external_stylesheets=[dbc.themes.FLATLY]) #CYBORG
+app = dash.Dash(external_stylesheets=[dbc.themes.FLATLY]) #CYBORG
 server = app.server
 
 selector_col = html.Div(
@@ -576,7 +654,7 @@ def update_agerace_table(name,freqtype):
     return data.to_dict('records'),sumdata.to_dict('records')
 
 
-
+states
 
 # =============================================================================
 # Testing
