@@ -20,7 +20,7 @@ first_time = False # this reloads some of the raw data files. should be turned o
 
 ## variable to use for heatmap for the project scatterplot
 projrank = 'CO2e tpy'
-projscl = 'Reds' # just use the default matplotlib colormap of Reds for scale
+projscl = 'Greens' # just use the default matplotlib colormap of Reds for scale
 
 # a helper function to fix the labeling of potentially missing CO2 variables
 def fixlab(x,roundnum=None):
@@ -147,7 +147,7 @@ agerace.loc[:,'Total'] = agerace.sum(axis=1,skipna=True)
 
 # making the default table for display
 default_agerace_table = pd.DataFrame(list(agerace.index.get_level_values('race').unique()),
-                                     columns=['Race/Age'])
+                                     columns=['Reg. Race/Age'])
 for ii in agerace.columns:
     default_agerace_table.loc[:,ii] = np.nan*len(default_agerace_table)
 
@@ -283,7 +283,7 @@ statedropdown = (
 if first_time:
     statecenters = states.centroid.apply(lambda x: {"lat": x.y, "lon": x.x}).to_dict()
 else:
-
+    # this is better to hardcode for speed, otherwise you can generate it from above.
     statecenters = {
         'AK': {'lat': 64.19864536710269, 'lon': -152.21161373123448},
         'AL': {'lat': 32.788821784191406, 'lon': -86.82877413163206},
@@ -352,6 +352,9 @@ else:
     'MS':6,'MT':4,'NC':5,'ND':5,'NE':5,'NH':6,'NJ':6,'NM':4,'NV':5,'NY':5,'OH':6,'OK':5,'OR':5,
     'PA':6,'RI':10,'SC':6,'SD':5,'TN':6,'TX':4,'UT':5,'VA':6,'VT':6,'WA':5,'WI':5,
     'WV':6,'WY':5}
+# fixing a few
+sizerank['CA'] = 5
+sizerank['DE'] = 7
 
 
 
@@ -638,14 +641,14 @@ def update_agerace_table(name,freqtype):
         data = (agerace.loc[name]
                        .applymap(fixlab)
                        .reset_index()
-                       .rename(columns={'race':'Race/Age'})
+                       .rename(columns={'race':'Reg. Race/Age'})
                 )
     else:
         data = (agerace.loc[name]
                        .divide(total_all.loc[name]) # the total groupby from above
                        .applymap(fixpct)
                        .reset_index()
-                       .rename(columns={'race':'Race/Age'})
+                       .rename(columns={'race':'Reg. Race/Age'})
                 )
     # getting the summary stats for the other table
     sumdata = sumtab.loc[name].to_frame().reset_index()
