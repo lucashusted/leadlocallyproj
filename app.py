@@ -280,7 +280,8 @@ sizerank = sizerank.zoom.to_dict()
 # The App Layout Elements
 # =============================================================================
 #app = JupyterDash(__name__)
-app = dash.Dash(external_stylesheets=[dbc.themes.FLATLY]) #CYBORG
+app = dash.Dash(__name__,external_stylesheets=[dbc.themes.FLATLY]) #CYBORG
+server = app.server
 
 selector_col = html.Div(
     [
