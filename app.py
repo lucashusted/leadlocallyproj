@@ -600,5 +600,7 @@ def update_agerace_table(name,freqtype):
 #             selections.remove(location)
 #     return
 
-app.run_server(debug=False,use_reloader=False)
+if __name__ == '__main__':
+    app.run_server()
+#app.run_server(debug=False,use_reloader=False)
 #app.run_server(mode='inline')
