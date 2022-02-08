@@ -267,6 +267,13 @@ projcolors = ((projects[projrank].rank(pct=True)//.2+1)
 default_proj_table = pd.DataFrame(zip(proj_cols[1:],[np.nan]*(len(proj_cols)-1)),
                                   columns=['Characteristics','Values'])
 
+### Projects table for the table at the end
+prettyproj = projects.loc[:,['Project_Name','City','State','Final/Pending','Classification',
+                             'Sector','CO2e tpy','PM10 tpy','PM2.5 tpy','PM tpy','NOx tpy',
+                             'VOC tpy','SO2 tpy','CO tpy']].sort_values(projrank,ascending=False)
+
+
+
 # =============================================================================
 # Features of the selectors
 # =============================================================================
@@ -352,9 +359,6 @@ else:
     'MS':6,'MT':4,'NC':5,'ND':5,'NE':5,'NH':6,'NJ':6,'NM':4,'NV':5,'NY':5,'OH':6,'OK':5,'OR':5,
     'PA':6,'RI':10,'SC':6,'SD':5,'TN':6,'TX':4,'UT':5,'VA':6,'VT':6,'WA':5,'WI':5,
     'WV':6,'WY':5}
-# fixing a few
-sizerank['CA'] = 5
-sizerank['DE'] = 7
 
 
 
@@ -367,9 +371,12 @@ server = app.server
 selector_col = html.Div(
     [
         html.H4(children='High Impact Local Projects and Voter Information'),
-        html.Br(),
-        html.P('Graphs show relative rank by geographic unit of relevant score. '\
-               'Select specific states to see breakdown by county.'
+        html.P('''
+            The map shades partisanship rank measures. Click or select a state to see a
+            county breakdown. Darker shaded dots represent local fossil fuel projects with more CO2e.
+            Browse specific counties or projects by clicking map or selecting from dropdowns.
+            A full list of projects is below.
+            '''
         ),
         html.Label('Location'),
         dcc.Dropdown(
@@ -394,7 +401,7 @@ selector_col = html.Div(
             clearable=False
         ),
     ],
-    style={'margin-left':'20px','margin-top':'20px'}
+    style={'margin-left':'20px','margin-top':'0px'}
 )
 
 map_col = html.Div(
@@ -476,6 +483,50 @@ radio_freq = dcc.RadioItems(
     labelStyle={'display': 'inline-block','margin-left':'4px','margin-right':'7px'},
 )
 
+
+full_projtable = html.Div(
+    [
+        html.Hr(),
+        html.H4(children='Browse The Full Project List'),
+        html.Br(),
+        dash_table.DataTable(
+            id='fullproj-table',
+            columns=[
+                {"name": i, "id": i} for i in prettyproj.columns
+            ],
+            page_action='none',
+            style_table={'height': '800px', 'overflowY': 'auto'},
+            sort_action='custom',
+            sort_mode='multi',
+            sort_by=[],
+            style_data={
+                'whiteSpace': 'normal',
+                'height': 'auto',
+                'color': 'black',
+                'backgroundColor': 'white'
+            },
+            style_cell={
+                'height': 'auto',
+                # all three widths are needed
+                'maxWidth': '170px', 'width': '100px', 'minWidth': '50px',
+                'whiteSpace': 'normal'
+            },
+            fixed_rows={'headers': True},
+            style_data_conditional=[
+                {
+                    'if': {'row_index': 'odd'},
+                    'backgroundColor': 'rgb(220, 220, 220)',
+                }
+            ],
+            style_header={
+                'backgroundColor': 'rgb(210, 210, 210)',
+                'color': 'black',
+                'fontWeight': 'bold'
+            }
+        ),
+    ], style={'margin-left':'20px','margin-right':'20px','margin-top':'10px'}
+)
+
 # =============================================================================
 # The App Layout Itself
 # =============================================================================
@@ -502,6 +553,11 @@ app.layout = html.Div(
                 dbc.Col(table_agerace, width=5)
             ], align='start' # justify='center'
         ),
+        dbc.Row(
+            [
+                dbc.Col(full_projtable,width=12)
+            ], align='center',justify='center'
+        )
     ]
 )
 
@@ -548,13 +604,13 @@ def display_choropleth(measure,location):
         mode = 'markers+text',
         text = projlabs,
         marker = go.scattermapbox.Marker(
-            size = 10,
+            size = 9,
             color = projcolors,  # This is used to match the color scale
             colorscale = projscl
         ),
         hoverinfo='text',
         customdata=projects['Project_Name'],
-        hoverlabel=go.scattermapbox.Hoverlabel(font={'size':15}) # the size of the text
+        hoverlabel=go.scattermapbox.Hoverlabel(font={'size':14}) # the size of the text
     )
 
     return fig
@@ -657,7 +713,47 @@ def update_agerace_table(name,freqtype):
     return data.to_dict('records'),sumdata.to_dict('records')
 
 
-states
+# =============================================================================
+# Update the projects table based on filters
+# =============================================================================
+
+@app.callback(
+    Output('fullproj-table', "data"),
+    Input('fullproj-table', "sort_by"))
+def update_majortable(sort_by):
+    # sorting on values
+    if len(sort_by):
+        dispproj = prettyproj.sort_values(
+            [col['column_id'] for col in sort_by],
+            ascending=[
+                col['direction'] == 'asc'
+                for col in sort_by
+            ],
+            inplace=False
+        )
+    else:
+        # No sort is applied
+        dispproj = prettyproj.sort_values(projrank,ascending=False)
+
+    return dispproj.to_dict('records')
+
+'''
+Project Name
+State
+County
+Project Description
+Classification
+Project Type
+Greenhouse Gases (CO2e)
+Particulate Matter (PM2.5)
+Nitrogen Oxides (NOx)
+Volatile Organic Compounds (VOC)
+Sulfur Dioxide (SO2)
+Carbon Monoxide (CO)
+Operating Status
+Actual or Expected Completion Year
+'''
+
 
 # =============================================================================
 # Testing
