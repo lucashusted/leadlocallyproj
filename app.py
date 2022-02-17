@@ -19,8 +19,11 @@ import dash_bootstrap_components as dbc
 first_time = False # this reloads some of the raw data files. should be turned off for deployment
 
 ## variable to use for heatmap for the project scatterplot
-projrank = 'CO2e tpy'
+projrank = 'Greenhouse Gases (CO2e)'
 projscl = 'Greens' # just use the default matplotlib colormap of Reds for scale
+
+# just the name of the presidential margin variable
+marname = 'presmargin'
 
 # a helper function to fix the labeling of potentially missing CO2 variables
 def fixlab(x,roundnum=None):
@@ -35,6 +38,19 @@ def fixpct(x):
         return '<0.1%'
     else:
         return str(round(100*x,1)) + '%'
+
+def roundorfine(x,rnum=2):
+    if type(x)==str:
+        return x
+    return round(x,rnum)
+
+def irregrank(x):
+    ''' Redo the rank so .5 is 0 when have pos/neg numbers for Democratic vote margin '''
+    y = pd.Series([np.nan]*len(x),index=x.index)
+    y.loc[x.le(0)] = x.loc[x.le(0)].rank(ascending=False,pct=True).divide(-2)
+    y.loc[x.gt(0)] = x.loc[x.gt(0)].rank(ascending=True,pct=True).divide(2)
+    return y.add(.5)
+
 
 # for the map rendering, here's the choices
 partisan_scores = {
@@ -51,8 +67,17 @@ partisan_scores = {
 }
 
 # Project_Name has to be first and placename is defined in the code below
-proj_cols = ['Project_Name','placename','Operational Status','Classification',
-            'Sector','CO2e tpy','CO tpy','NOx tpy']
+proj_cols = {
+    'Project Name':'Project Name',
+    'placename':'City',
+    'Operating Status':'Status',
+    'Classification':'Class',
+    'Industry Sector':'Sector',
+    'Greenhouse Gases (CO2e)':'Greenhouse Gases',
+    'Carbon Monoxide (CO)':'Carbon Monoxide',
+    'Nitrogen Oxides (NOx)':'Nirogen Oxides'
+}
+
 
 race_dict = {
     'African_Americans':'African American',
@@ -68,6 +93,7 @@ age_dict = {
     '65':'65+',
 }
 
+
 # getting the fixed multi-index columns combining race and age
 agerace_dict = dict(
     zip(
@@ -77,8 +103,9 @@ agerace_dict = dict(
 )
 
 sum_table_cols = {
+    marname:'2020 Presidential Margin',
     'avg_partisan_score':'Partisan Score',
-    'avg_yale_score':'Yale Score',
+    #'avg_yale_score':'Yale Score',
     'avg_climate_score':'Climate Score',
     'avg_biden_support_score':'Biden Support Score',
     'civis_registered_count':'Registered',
@@ -99,6 +126,32 @@ counties = counties.merge(state_names,
                           left_on='STATEFP',
                           how='left')
 
+## Presidential Election Data from John
+presdat = pd.read_csv(os.path.join('data','Pres_Election_Data_2020_county.csv'),
+                     usecols=[2,13,14,67],
+                     thousands=',',
+                     names=['total','biden','trump','fips'],
+                     skiprows=1).dropna()
+
+presdat.loc[:,'state'] = np.where(presdat.fips.astype(int).astype(str).str.len().gt(2),
+                                 False,
+                                 True)
+presdat.fips = np.where(presdat.state,
+                        presdat.fips.astype(int).astype(str).str.zfill(2),
+                        presdat.fips.astype(int).astype(str).str.zfill(5)
+                        )
+
+presdat.loc[:,'demmarge'] = presdat.biden.divide(presdat.total).add(-presdat.trump.divide(presdat.total))
+presdat.loc[:,marname] = presdat.demmarge.multiply(100).round(1).apply(lambda x:
+    'D '+str(x)[0:4]+'%' if x>=0 else 'R '+str(x)[1:5]+'%'
+    )
+
+# critical that this is called [same as above]_rank for later code
+# a ranking from 0-1 with .5 being equal shares for each person, and more votes for biden == more blue
+# doing this separately for states and counties
+presdat.loc[presdat.state,'%s_rank' %marname] = irregrank(presdat.loc[presdat.state,'demmarge'])
+presdat.loc[~presdat.state,'%s_rank' %marname] = irregrank(presdat.loc[~presdat.state,'demmarge'])
+
 # TO CHANGE BUT FOR NOW DF IS WHERE ALL THE SCORES AND CENSUS DATA SHOULD BE BY COUNTY
 if first_time:
     df = pd.read_excel(os.path.join('data','Final Aggregations (County_District_City Levels).xlsx'),
@@ -112,16 +165,17 @@ df.loc[:,'civis_registered_ratio'] = df.civis_registered_count.divide(
     df.civis_registered_count+df.civis_unregistered_count
 )
 
+df = df.merge(presdat.loc[~presdat.state,:],left_on='county_geoid',right_on='fips',how='left')
 
-
+## getting the county race data
 races = df.set_index('county_geoid').loc[:,['Registered_{}_Total'.format(ii) for ii in race_dict.keys()]]
 races.loc[:,'pop_total'] = races.sum(axis=1)
 
-counties = counties.merge(df.loc[:,['county_geoid','pop2012']+
+counties = counties.merge(df.loc[:,['county_geoid','pop2012',marname,'%s_rank' %marname]+
                                  list(partisan_scores.values())],
                           left_on='GEOID',
                           right_on='county_geoid',
-                          how='inner')
+                          how='inner') # inner
 
 counties.loc[:,'placename'] = counties.NAME+', '+counties.state_abbrev
 counties = counties.assign(clicktype='county')
@@ -158,6 +212,8 @@ sumtab.columns = sum_table_cols.values()
 for ii in sumtab.columns:
     if 'Fraction' in ii:
         sumtab.loc[:,ii] = sumtab.loc[:,ii].apply(fixpct)
+    elif 'Margin' in ii:
+        pass
     elif ii in ['Registered','Unregistered']:
         sumtab.loc[:,ii] = sumtab.loc[:,ii].apply(lambda x: fixlab(x))
     else:
@@ -197,7 +253,15 @@ for ii in partisan_scores.values():
 
 states = states.assign(clicktype='state')
 
+# merging in the presidential data into the states
+states = states.join(
+    presdat.loc[presdat.state,:].assign(
+        state_abbrev=presdat.fips.map(state_names.set_index('state_fips').state_abbrev.to_dict())
+    ).set_index('state_abbrev').filter(regex='pres')
+)
+
 statedict = states.placename.to_dict()
+
 
 # get all the ones that matched
 
@@ -221,18 +285,20 @@ projects = pd.read_csv(os.path.join('data','projects.csv'))
 projects = projects.assign(clicktype='project')
 projects.loc[:,'placename'] = projects.City.str.title()+', '+projects.State
 
-# No repeated projects names, so give unique names to multiple projects with same name
-projects = projects.sort_values(['Project_Name',projrank],ascending=[True, False])
-projects.loc[:,'projcount'] = projects.assign(_cons = 1).groupby('Project_Name')._cons.cumsum().values
-projects.loc[:,'Project_Name'] = (
-    np.where(projects.groupby('Project_Name').projcount.transform('count')==1,
-             projects.Project_Name,
-             projects.Project_Name + ' (' + projects.projcount.astype(str) + ')'
-             )
-)
+# OLD WAY when using the old projects.csv file because there were non-unique projects
+# projects = projects.sort_values(['Project Name',projrank],ascending=[True, False])
+# projects.loc[:,'projcount'] = projects.assign(_cons = 1).groupby('Project_Name')._cons.cumsum().values
+# projects.loc[:,'Project_Name'] = (
+#     np.where(projects.groupby('Project_Name').projcount.transform('count')==1,
+#              projects.Project_Name,
+#              projects.Project_Name + ' (' + projects.projcount.astype(str) + ')'
+#              )
+# )
+
+projects = projects.set_index('Project ID').sort_values('Project Name')
 
 # making the dictionary with all the projects
-projdict = projects.Project_Name.to_dict()
+projdict = projects['Project Name'].to_dict()
 
 # making the labels for use later
 projlabs = []
@@ -240,14 +306,14 @@ for ii,jj in projects.iterrows():
     lab = (
         '<b>{}</b><br><i>{}</i><br>Status: {}<br>Classification: {}<br>'\
         'Sector: {}<br>CO2e TPY: {}<br>CO TPY: {}<br>NOx TPY: {}'.format(
-            jj['Project_Name'],
+            jj['Project Name'],
             jj['placename'],
-            jj['Operational Status'].title(),
+            jj['Operating Status'].title(),
             jj['Classification'].title(),
-            jj['Sector'].title(),
-            fixlab(jj['CO2e tpy']),
-            fixlab(jj['CO tpy']),
-            fixlab(jj['NOx tpy'])
+            jj['Industry Sector'].title(),
+            fixlab(jj['Greenhouse Gases (CO2e)']),
+            fixlab(jj['Carbon Monoxide (CO)']),
+            fixlab(jj['Nitrogen Oxides (NOx)'])
         )
     )
     projlabs.append(lab)
@@ -264,15 +330,34 @@ projcolors = ((projects[projrank].rank(pct=True)//.2+1)
 # full custom with ranks
 # projscl = [[0,'grey'],[.2,'red'],[.4,'blue'],[.6,'brown'],[.8,'orange'],[1,'pink']]
 
-default_proj_table = pd.DataFrame(zip(proj_cols[1:],[np.nan]*(len(proj_cols)-1)),
+
+
+default_proj_table = pd.DataFrame(zip(list(proj_cols.values())[1:],[np.nan]*(len(proj_cols)-1)),
                                   columns=['Characteristics','Values'])
 
 ### Projects table for the table at the end
-prettyproj = projects.loc[:,['Project_Name','City','State','Final/Pending','Classification',
-                             'Sector','CO2e tpy','PM10 tpy','PM2.5 tpy','PM tpy','NOx tpy',
-                             'VOC tpy','SO2 tpy','CO tpy']].sort_values(projrank,ascending=False)
-
-
+keepprojcols = {
+    'Project Name':'Name',
+    'City':'City',
+    'County or Parish':'County',
+    'State':'State',
+    'Classification':'Class',
+    'Industry Sector':'Sector',
+    'Project Type':'Type',
+    'Operating Status':'Status',
+    'Greenhouse Gases (CO2e)':'CO2e',
+    'Particulate Matter (PM2.5)':'PM2.5',
+    'Nitrogen Oxides (NOx)':'NOx',
+    'Volatile Organic Compounds (VOC)':'VOC',
+    'Sulfur Dioxide (SO2)':'SO2',
+    'Carbon Monoxide (CO)':'CO',
+    'Hazardous Air Pollutants (HAPs)':'HAPs'
+}
+prettyproj = (projects
+    .loc[:,keepprojcols.keys(),]
+    .sort_values(projrank,ascending=False)
+    .rename(columns=keepprojcols)
+)
 
 # =============================================================================
 # Features of the selectors
@@ -360,12 +445,10 @@ else:
     'PA':6,'RI':10,'SC':6,'SD':5,'TN':6,'TX':4,'UT':5,'VA':6,'VT':6,'WA':5,'WI':5,
     'WV':6,'WY':5}
 
-
-
 # The App Layout Elements
 # =============================================================================
 #app = JupyterDash(__name__)
-app = dash.Dash(external_stylesheets=[dbc.themes.FLATLY]) #CYBORG
+app = dash.Dash(external_stylesheets=[dbc.themes.DARKLY]) #CYBORG FLATLY
 server = app.server
 
 selector_col = html.Div(
@@ -396,8 +479,11 @@ selector_col = html.Div(
         html.Label('Voter Measure'),
         dcc.Dropdown(
             id='measure',
-            options=[{'value': jj, 'label': ii} for ii,jj in partisan_scores.items()],
-            value='avg_partisan_score', # the default value?
+            options=(
+                [{'value': marname, 'label': 'Democratic 2020 Presidential Margin'}]
+                +[{'value': jj, 'label': ii} for ii,jj in partisan_scores.items()]
+            ),
+            value=marname, # the default value?
             clearable=False
         ),
     ],
@@ -419,7 +505,21 @@ table_proj = html.Div(
             # all three widths are needed
             'maxWidth': '170px', # 'minWidth': '170px', 'width': '170px',
             'whiteSpace': 'normal'
-        }
+        },
+        # style_header={
+        #     'backgroundColor': 'rgb(210, 210, 210)',
+        #     'color': 'black',
+        #     'fontWeight': 'bold'
+        # }
+        style_header={
+            'backgroundColor': 'rgb(30, 30, 30)',
+            'color': 'white'
+        },
+        style_data={
+            'backgroundColor': 'rgb(50, 50, 50)',
+            'color': 'white',
+            'height': 'auto',
+        },
     ),
     # add the margin on the table, so no need on the selectors
     style={'margin-left':'20px','margin-right':'20px','margin-top':'10px'}
@@ -435,7 +535,21 @@ table_sumtab = html.Div(
             # all three widths are needed
             'maxWidth': '170px', #'width': '100px', 'minWidth': '100px',
             'whiteSpace': 'normal'
-        }
+        },
+        # style_header={
+        #     'backgroundColor': 'rgb(210, 210, 210)',
+        #     'color': 'black',
+        #     'fontWeight': 'bold'
+        # }
+        style_header={
+            'backgroundColor': 'rgb(30, 30, 30)',
+            'color': 'white'
+        },
+        style_data={
+            'backgroundColor': 'rgb(50, 50, 50)',
+            'color': 'white',
+            'height': 'auto',
+        },
     ),
     # add the margin on the table, so no need on the selectors
     style={'margin-left':'20px','margin-right':'5px','margin-top':'10px'}
@@ -451,7 +565,21 @@ table_agerace = html.Div(
             # all three widths are needed
             'maxWidth': '170px', #'width': '100px', 'minWidth': '100px',
             'whiteSpace': 'normal'
-        }
+        },
+        # style_header={
+        #     'backgroundColor': 'rgb(210, 210, 210)',
+        #     'color': 'black',
+        #     'fontWeight': 'bold'
+        # }
+        style_header={
+            'backgroundColor': 'rgb(30, 30, 30)',
+            'color': 'white'
+        },
+        style_data={
+            'backgroundColor': 'rgb(50, 50, 50)',
+            'color': 'white',
+            'height': 'auto',
+        },
     ),
     # add the margin on the table, so no need on the selectors
     style={'margin-left':'5px','margin-right':'50px','margin-top':'10px'}
@@ -488,42 +616,98 @@ full_projtable = html.Div(
     [
         html.Hr(),
         html.H4(children='Browse The Full Project List'),
-        html.Br(),
+        html.P('''
+            The full list of projects from above is found in this table, sorted by CO2e (descending).
+            Columns can be sorted (ascending/descending/cleared) and filtered. Filters can be applied either exactly
+            (eg. typing TX pulls in all projects in Texas) or with operators like > or < to denote
+            values greater than or less than a value (eg. >MD gives all states alphabetically greater than
+            or equal to Maryland while >100 gives all values in a column greater than or equal to 100.)
+            Columns or rows can be removed entirely, and the final displayed table can be exported to an Excel file.
+            '''
+            ),
+        # dash_table.DataTable(
+        #     id='fullproj-table',
+        #     columns=[
+        #         {"name": i, "id": i} for i in prettyproj.columns
+        #     ],
+        #     page_action='none',
+        #     style_table={'height': '1000px', 'overflowY': 'auto'},
+        #     sort_action='custom',
+        #     sort_mode='multi',
+        #     sort_by=[],
+        #     style_data={
+        #         'whiteSpace': 'normal',
+        #         'height': 'auto',
+        #         'color': 'black',
+        #         'backgroundColor': 'white'
+        #     },
+        #     style_cell={
+        #         'height': 'auto',
+        #         # all three widths are needed
+        #         'maxWidth': '200px', 'width': '80px', 'minWidth': '30px',
+        #         'whiteSpace': 'normal'
+        #     },
+        #     fixed_rows={'headers': True},
+        #     style_data_conditional=[
+        #         {
+        #             'if': {'row_index': 'odd'},
+        #             'backgroundColor': 'rgb(220, 220, 220)',
+        #         }
+        #     ],
+        #     style_header={
+        #         'backgroundColor': 'rgb(210, 210, 210)',
+        #         'color': 'black',
+        #         'fontWeight': 'bold'
+        #     }
+        # ),
         dash_table.DataTable(
             id='fullproj-table',
             columns=[
-                {"name": i, "id": i} for i in prettyproj.columns
+                {"name": i, "id": i, "deletable": True, "selectable": True} for i in prettyproj.columns
             ],
-            page_action='none',
-            style_table={'height': '800px', 'overflowY': 'auto'},
-            sort_action='custom',
-            sort_mode='multi',
-            sort_by=[],
-            style_data={
-                'whiteSpace': 'normal',
-                'height': 'auto',
-                'color': 'black',
-                'backgroundColor': 'white'
-            },
+            data=prettyproj.to_dict('records'),
+            editable=False,
+            filter_action="native",
+            sort_action="native",
+            sort_mode="multi",
+            column_selectable=False,
+            row_selectable=False,
+            row_deletable=True,
+            selected_columns=[],
+            selected_rows=[],
+            export_format='xlsx',
+            export_headers='display',
+            page_action='none', # native
+            style_table={'height': '1000px', 'overflowY': 'auto'},
             style_cell={
                 'height': 'auto',
                 # all three widths are needed
-                'maxWidth': '170px', 'width': '100px', 'minWidth': '50px',
-                'whiteSpace': 'normal'
+                'maxWidth': '120px', 'minWidth':'60px',
+                'whiteSpace': 'normal',
+                'fontSize': '11'
+            },
+            style_header={
+                'backgroundColor': 'rgb(30, 30, 30)',
+                'color': 'white'
+            },
+            style_data={
+                'backgroundColor': 'rgb(50, 50, 50)',
+                'color': 'white',
+                'height': 'auto',
             },
             fixed_rows={'headers': True},
-            style_data_conditional=[
+            style_cell_conditional=[
+                # we can do special formatting for certain cells
                 {
-                    'if': {'row_index': 'odd'},
-                    'backgroundColor': 'rgb(220, 220, 220)',
+                    'if': {'column_id': 'Name'},
+                    'textAlign': 'left',
+                    'maxWidth':'300px'
                 }
             ],
-            style_header={
-                'backgroundColor': 'rgb(210, 210, 210)',
-                'color': 'black',
-                'fontWeight': 'bold'
-            }
         ),
+        html.Br(),
+        html.Hr(),
+        html.Br()
     ], style={'margin-left':'20px','margin-right':'20px','margin-top':'10px'}
 )
 
@@ -582,6 +766,7 @@ def display_choropleth(measure,location):
     fig = px.choropleth_mapbox(plotdf,
                                geojson=plotdf.geometry,
                                locations=plotdf.index,
+                               template='plotly_dark',
                                color='{}_rank'.format(measure),
                                color_continuous_scale='rdbu', #"Viridis",
                                range_color=(0, 1),
@@ -592,15 +777,17 @@ def display_choropleth(measure,location):
                                labels = {'{}_rank'.format(measure):'Rank (Pct.)'},
                                custom_data=[plotdf['clicktype'],
                                             plotdf['placename'],
-                                            plotdf[measure].round(2)]
+                                            plotdf[measure].apply(roundorfine)]
                           )
-    fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
+    fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0},
+                      plot_bgcolor='rgba(0, 0, 0, 0)',
+                      paper_bgcolor='rgba(0, 0, 0, 0)')
     fig.update_traces(
         hovertemplate='<b>%{customdata[1]}</b><br><i>Value:</i> %{customdata[2]}<br>'
         )
     fig.add_scattermapbox(
-        lat = projects.lat.to_list(),
-        lon = projects.lon.to_list(),
+        lat = projects.Latitude.to_list(),
+        lon = projects.Longitude.to_list(),
         mode = 'markers+text',
         text = projlabs,
         marker = go.scattermapbox.Marker(
@@ -609,7 +796,7 @@ def display_choropleth(measure,location):
             colorscale = projscl
         ),
         hoverinfo='text',
-        customdata=projects['Project_Name'],
+        customdata=projects['Project Name'],
         hoverlabel=go.scattermapbox.Hoverlabel(font={'size':14}) # the size of the text
     )
 
@@ -672,11 +859,12 @@ def update_project_select(clickData,value):
 def update_proj_table(name):
     if not name:
         return default_proj_table.to_dict('records')
-    data = (projects.loc[:,proj_cols].set_index('Project_Name')
+    data = (projects.loc[:,proj_cols.keys()].set_index('Project Name')
                     .loc[projdict[name]]
                     .to_frame()
                     .reset_index()
             )
+    data.iloc[:,0] = data.iloc[:,0].map(proj_cols)
     data.columns = ['Characteristics','Values']
     return data.to_dict('records')
 
@@ -717,42 +905,38 @@ def update_agerace_table(name,freqtype):
 # Update the projects table based on filters
 # =============================================================================
 
+# @app.callback(
+#     Output('fullproj-table', "data"),
+#     Input('fullproj-table', "sort_by"))
+# def update_majortable(sort_by):
+#     # sorting on values
+#     if len(sort_by):
+#         dispproj = prettyproj.sort_values(
+#             [col['column_id'] for col in sort_by],
+#             ascending=[
+#                 col['direction'] == 'asc'
+#                 for col in sort_by
+#             ],
+#             inplace=False
+#         )
+#     else:
+#         # No sort is applied
+#         dispproj = prettyproj.sort_values(keepprojcols[projrank],ascending=False)
+#
+#     return dispproj.to_dict('records')
+
+
 @app.callback(
-    Output('fullproj-table', "data"),
-    Input('fullproj-table', "sort_by"))
-def update_majortable(sort_by):
-    # sorting on values
-    if len(sort_by):
-        dispproj = prettyproj.sort_values(
-            [col['column_id'] for col in sort_by],
-            ascending=[
-                col['direction'] == 'asc'
-                for col in sort_by
-            ],
-            inplace=False
-        )
-    else:
-        # No sort is applied
-        dispproj = prettyproj.sort_values(projrank,ascending=False)
+    Output('fullproj-table', 'style_data_conditional'),
+    Input('fullproj-table', 'selected_columns')
+)
+def update_styles(selected_columns):
+    return [{
+        'if': { 'column_id': i },
+        'background_color': '#D2F3FF'
+    } for i in selected_columns]
 
-    return dispproj.to_dict('records')
 
-'''
-Project Name
-State
-County
-Project Description
-Classification
-Project Type
-Greenhouse Gases (CO2e)
-Particulate Matter (PM2.5)
-Nitrogen Oxides (NOx)
-Volatile Organic Compounds (VOC)
-Sulfur Dioxide (SO2)
-Carbon Monoxide (CO)
-Operating Status
-Actual or Expected Completion Year
-'''
 
 
 # =============================================================================
