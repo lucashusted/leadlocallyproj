@@ -448,7 +448,9 @@ else:
 # The App Layout Elements
 # =============================================================================
 #app = JupyterDash(__name__)
-app = dash.Dash(external_stylesheets=[dbc.themes.DARKLY]) #CYBORG FLATLY
+app = dash.Dash(__name__,
+                external_stylesheets=[dbc.themes.DARKLY], #CYBORG FLATLY
+                assets_folder=assets_path)
 server = app.server
 
 selector_col = html.Div(
