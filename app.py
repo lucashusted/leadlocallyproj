@@ -25,6 +25,8 @@ projscl = 'Greens' # just use the default matplotlib colormap of Reds for scale
 # just the name of the presidential margin variable
 marname = 'presmargin'
 
+assets_path = os.path.join(os.getcwd(),'fixed_assets')
+
 # a helper function to fix the labeling of potentially missing CO2 variables
 def fixlab(x,roundnum=None):
     if roundnum:
