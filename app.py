@@ -53,6 +53,18 @@ def irregrank(x):
     y.loc[x.gt(0)] = x.loc[x.gt(0)].rank(ascending=True,pct=True).divide(2)
     return y.add(.5)
 
+def remove_periods(x):
+    ''' Some projects look like Armagh Compressor Station.10353-01, this fixes them '''
+    y = x.strip().replace('â€“','-').split('.')
+    if len(y) == 3:
+        return '.'.join(y[0:2])
+    elif len(y) == 2:
+        if y[0].endswith('No'):
+            return '.'.join(y)
+        else:
+            return y[0]
+    return y[0]
+
 
 # for the map rendering, here's the choices
 partisan_scores = {
@@ -71,9 +83,9 @@ partisan_scores = {
 # Project_Name has to be first and placename is defined in the code below
 proj_cols = {
     'Project Name':'Project Name',
-    'placename':'City',
+    'placename':'County, State',
     'Operating Status':'Status',
-    'Classification':'Class',
+    # 'Classification':'Class',
     'Industry Sector':'Sector',
     'Greenhouse Gases (CO2e)':'Greenhouse Gases',
     'Carbon Monoxide (CO)':'Carbon Monoxide',
@@ -283,21 +295,53 @@ statedict = states.placename.to_dict()
 # =============================================================================
 # Getting the Projects and Labels Ready for the Scatterplot
 # =============================================================================
+
+# new projects, as sent to us by Oil and Gas Watch
 projects = pd.read_csv(os.path.join('data','projects.csv'))
+projects = projects.loc[projects.Longitude.ne(0),:] # getting rid of missing places
+
+# Getting the Old Projects and Aligning them with the new ones sent to us
+allproj = pd.read_csv(os.path.join('data','projects_full.csv'))
+allproj = allproj.dropna(subset=['Coordinates'])
+allproj.loc[:,'Longitude'] = allproj.Coordinates.apply(lambda x: float((str(x).split(', ')[0])))
+allproj.loc[:,'Latitude'] = allproj.Coordinates.apply(lambda x: float((str(x).split(', ')[1])))
+
+# make a fake id, and ensure they don't overlap with the existing IDs
+maxprojid = (projects.loc[:,'Project ID'].max()//5000 + 1)*5000
+allproj.loc[:,'Project ID'] = maxprojid + allproj.index.values
+
+allproj = allproj.rename(columns={'Sector':'Industry Sector',
+                                  'Status':'Operating Status',
+                                  'Type':'Project Type',
+                                  'Potential CO2e (tons/year)':'Greenhouse Gases (CO2e)',
+                                  'Project':'Project Name',
+                                  'Facility':'Facility Name'})
+allproj = allproj.drop(columns=[x for x in allproj.columns if x not in projects.columns])
+
+
+projects = projects.append(allproj)
+
+projects.loc[:,'Project Name'] = projects.loc[:,'Project Name'].apply(remove_periods)
+
+projects = projects.loc[
+    ~projects.duplicated(subset=['Project Name','County or Parish','State']),:
+        ]
+
+
+#projects.loc[:,'County or Parish'] = projects.loc[:,'County or Parish'].fillna('Missing')
+projects = projects.dropna(subset=['County or Parish'])
 projects = projects.assign(clicktype='project')
-projects.loc[:,'placename'] = projects.City.str.title()+', '+projects.State
 
-# OLD WAY when using the old projects.csv file because there were non-unique projects
-# projects = projects.sort_values(['Project Name',projrank],ascending=[True, False])
-# projects.loc[:,'projcount'] = projects.assign(_cons = 1).groupby('Project_Name')._cons.cumsum().values
-# projects.loc[:,'Project_Name'] = (
-#     np.where(projects.groupby('Project_Name').projcount.transform('count')==1,
-#              projects.Project_Name,
-#              projects.Project_Name + ' (' + projects.projcount.astype(str) + ')'
-#              )
-# )
 
+projects.loc[:,'placename'] = (
+    projects.loc[:,'County or Parish'].str.strip().str.title() + ', ' + 
+    projects.State.str.strip().str.upper()
+    )
+
+
+### Merging them together and adding some other variables
 projects = projects.set_index('Project ID').sort_values('Project Name')
+
 
 # making the dictionary with all the projects
 projdict = projects['Project Name'].to_dict()
@@ -306,12 +350,12 @@ projdict = projects['Project Name'].to_dict()
 projlabs = []
 for ii,jj in projects.iterrows():
     lab = (
-        '<b>{}</b><br><i>{}</i><br>Status: {}<br>Classification: {}<br>'\
+        '<b>{}</b><br><i>{}</i><br>Status: {}<br>'\
         'Sector: {}<br>CO2e TPY: {}<br>CO TPY: {}<br>NOx TPY: {}'.format(
             jj['Project Name'],
             jj['placename'],
             jj['Operating Status'].title(),
-            jj['Classification'].title(),
+            # jj['Classification'].title(),
             jj['Industry Sector'].title(),
             fixlab(jj['Greenhouse Gases (CO2e)']),
             fixlab(jj['Carbon Monoxide (CO)']),
@@ -340,10 +384,9 @@ default_proj_table = pd.DataFrame(zip(list(proj_cols.values())[1:],[np.nan]*(len
 ### Projects table for the table at the end
 keepprojcols = {
     'Project Name':'Name',
-    'City':'City',
     'County or Parish':'County',
     'State':'State',
-    'Classification':'Class',
+    # 'Classification':'Class',
     'Industry Sector':'Sector',
     'Project Type':'Type',
     'Operating Status':'Status',
@@ -352,14 +395,32 @@ keepprojcols = {
     'Nitrogen Oxides (NOx)':'NOx',
     'Volatile Organic Compounds (VOC)':'VOC',
     'Sulfur Dioxide (SO2)':'SO2',
-    'Carbon Monoxide (CO)':'CO',
-    'Hazardous Air Pollutants (HAPs)':'HAPs'
+    'Carbon Monoxide (CO)':'CO'
 }
 prettyproj = (projects
     .loc[:,keepprojcols.keys(),]
     .sort_values(projrank,ascending=False)
     .rename(columns=keepprojcols)
 )
+
+
+# add some "noise" to coordinates so that you don't get overlapping projects
+for ii in ['Latitude','Longitude']:
+    projects.loc[:,ii] = projects.loc[:,ii].apply(lambda x: x+np.random.randn()/1e6)
+
+
+
+
+# OLD WAY when using the old projects.csv file because there were non-unique projects
+# projects = projects.sort_values(['Project Name',projrank],ascending=[True, False])
+# projects.loc[:,'projcount'] = projects.assign(_cons = 1).groupby('Project_Name')._cons.cumsum().values
+# projects.loc[:,'Project_Name'] = (
+#     np.where(projects.groupby('Project_Name').projcount.transform('count')==1,
+#              projects.Project_Name,
+#              projects.Project_Name + ' (' + projects.projcount.astype(str) + ')'
+#              )
+# )
+
 
 # =============================================================================
 # Features of the selectors
