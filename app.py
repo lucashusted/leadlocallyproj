@@ -41,6 +41,14 @@ def fixpct(x):
     else:
         return str(round(100*x,1)) + '%'
 
+def fixnum(x):
+    if pd.isna(x):
+        return 'NA'
+    if x<50:
+        return '<50'
+    else:
+        return fixlab(x)
+
 def roundorfine(x,rnum=2):
     if type(x)==str:
         return x
@@ -68,16 +76,16 @@ def remove_periods(x):
 
 # for the map rendering, here's the choices
 partisan_scores = {
-    'Partisan Score':'avg_partisan_score',
-    'Yale Score':'avg_yale_score',
-    'Climate Score':'avg_climate_score',
-    'Biden Support Score':'avg_biden_support_score',
-    'Local Voter Score':'avg_local_voter_score',
-    'Pres. General Turnout':'avg_p_turnout_score',
-    'Midterm General Turnout':'avg_m_turnout_score',
-    'Offyear General Turnout':'avg_offyear_m_turnout_score',
-    'Pres. Primary Turnout':'avg_pp_turnout_score',
-    'Non-Pres Primary Turnout':'avg_nonpp_turnout_score'
+    'Partisan Score':'partisan_score',
+    'Yale Score':'yale_score',
+    'Climate Score':'climate_score',
+    'Biden Support Score':'biden_support_score',
+    'Local Voter Score':'local_voter_score',
+    'Pres. General Turnout':'p_turnout_score',
+    'Midterm General Turnout':'m_turnout_score',
+    'Offyear General Turnout':'offyear_m_turnout_score',
+    'Pres. Primary Turnout':'pp_turnout_score',
+    'Non-Pres Primary Turnout':'nonpp_turnout_score'
 }
 
 # Project_Name has to be first and placename is defined in the code below
@@ -92,39 +100,14 @@ proj_cols = {
     'Nitrogen Oxides (NOx)':'Nirogen Oxides'
 }
 
-
-race_dict = {
-    'African_Americans':'African American',
-    'Asians':'Asian',
-    'Caucasians':'White',
-    'Hispanics':'Hispanic',
-    'Native_Americans':'Native American',
-    'Other_and_Uncoded_Race':'Other'
-}
-age_dict = {
-    '18_34':'18-34',
-    '35_64':'35-64',
-    '65':'65+',
-}
-
-
-# getting the fixed multi-index columns combining race and age
-agerace_dict = dict(
-    zip(
-        ['Registered_{}_{}'.format(ii,jj) for ii in race_dict.keys() for jj in age_dict.keys()],
-        [tuple([ii,jj]) for ii in race_dict.values() for jj in age_dict.values()]
-    )
-)
-
 sum_table_cols = {
     marname:'2020 Presidential Margin',
-    'avg_partisan_score':'Partisan Score',
-    #'avg_yale_score':'Yale Score',
-    'avg_climate_score':'Climate Score',
-    'avg_biden_support_score':'Biden Support Score',
-    'civis_registered_count':'Registered',
-    'civis_unregistered_count':'Unregistered',
-    'civis_registered_ratio':'Fraction Registered'
+    'partisan_score':'Partisan Score',
+    #'yale_score':'Yale Score',
+    'climate_score':'Climate Score',
+    'biden_support_score':'Biden Support Score',
+    'registration_rate':'Registration Rate',
+    'population':'Population'
 }
 
 # =============================================================================
@@ -144,16 +127,16 @@ counties = counties.merge(state_names,
 presdat = pd.read_csv(os.path.join('data','Pres_Election_Data_2020_county.csv'),
                      usecols=[2,13,14,67],
                      thousands=',',
-                     names=['total','biden','trump','fips'],
+                     names=['total','biden','trump','geoid'],
                      skiprows=1).dropna()
 
-presdat.loc[:,'state'] = np.where(presdat.fips.astype(int).astype(str).str.len().gt(2),
+presdat.loc[:,'state'] = np.where(presdat.geoid.astype(int).astype(str).str.len().gt(2),
                                  False,
                                  True)
-presdat.fips = np.where(presdat.state,
-                        presdat.fips.astype(int).astype(str).str.zfill(2),
-                        presdat.fips.astype(int).astype(str).str.zfill(5)
-                        )
+presdat.geoid = np.where(presdat.state,
+                         presdat.geoid.astype(int).astype(str).str.zfill(2),
+                         presdat.geoid.astype(int).astype(str).str.zfill(5)
+                         )
 
 presdat.loc[:,'demmarge'] = presdat.biden.divide(presdat.total).add(-presdat.trump.divide(presdat.total))
 presdat.loc[:,marname] = presdat.demmarge.multiply(100).round(1).apply(lambda x:
@@ -166,69 +149,60 @@ presdat.loc[:,marname] = presdat.demmarge.multiply(100).round(1).apply(lambda x:
 presdat.loc[presdat.state,'%s_rank' %marname] = irregrank(presdat.loc[presdat.state,'demmarge'])
 presdat.loc[~presdat.state,'%s_rank' %marname] = irregrank(presdat.loc[~presdat.state,'demmarge'])
 
-# TO CHANGE BUT FOR NOW DF IS WHERE ALL THE SCORES AND CENSUS DATA SHOULD BE BY COUNTY
-if first_time:
-    df = pd.read_excel(os.path.join('data','Final Aggregations (County_District_City Levels).xlsx'),
-                       sheet_name='County')
-    df.to_csv(os.path.join('data','final_aggregations.csv'),index=False)
-else:
-    df = pd.read_csv(os.path.join('data','final_aggregations.csv'))
+# scores and registered voters by county -- we will call scores df since it's one row one county
+registered = pd.read_csv(os.path.join('data','civis_registration_totals.csv'))
+df = pd.read_csv(os.path.join('data','civis_scores_cleaned.csv'))
+df.geoid = df.geoid.astype(str).str.zfill(5)
+registered.geoid = registered.geoid.astype(str).str.zfill(5)
 
-df.county_geoid = df.county_geoid.astype(str).str.zfill(5) # getting 5 digit fips thing
-df.loc[:,'civis_registered_ratio'] = df.civis_registered_count.divide(
-    df.civis_registered_count+df.civis_unregistered_count
-)
+# Getting all the county data in similar format
+df = df.set_index('geoid')
+presdat = presdat.loc[~presdat.state,:].set_index('geoid')
 
-df = df.merge(presdat.loc[~presdat.state,:],left_on='county_geoid',right_on='fips',how='left')
+# for the main table which will include other
+countpop_total = registered.groupby('geoid')[['registered','population']].sum()
 
-## getting the county race data
-races = df.set_index('county_geoid').loc[:,['Registered_{}_Total'.format(ii) for ii in race_dict.keys()]]
-races.loc[:,'pop_total'] = races.sum(axis=1)
+# get rid of other!
+reg_real = registered.loc[registered.race.ne('Other'),:].set_index(['geoid','race','age'])
 
-counties = counties.merge(df.loc[:,['county_geoid','pop2012',marname,'%s_rank' %marname]+
-                                 list(partisan_scores.values())],
-                          left_on='GEOID',
-                          right_on='county_geoid',
-                          how='inner') # inner
+# getting unregistered population, totals by race and age, and also the percentages
+unreg = pd.Series(reg_real.population - reg_real.registered,name='unregistered').clip(0).sort_index()
+unreg_total = unreg.groupby('geoid').sum()
+unreg = unreg.unstack()
+unreg.loc[:,'Total'] = unreg.sum(axis=1).values
+unreg = unreg.append(unreg.groupby('geoid').sum().assign(race='Total').set_index('race',append=True))
 
+
+counties = counties.rename(columns={'GEOID':'geoid'}).set_index('geoid')
+counties = counties.join(countpop_total).join(df)
 counties.loc[:,'placename'] = counties.NAME+', '+counties.state_abbrev
+counties = counties.join(presdat.loc[:,['presmargin','presmargin_rank']])
+counties.loc[:,'registration_rate'] = counties.registered/counties.population
+
 counties = counties.assign(clicktype='county')
 
 # get the county dictionary and sort the values
-countydict = counties.sort_values(['state_abbrev','placename']).set_index('GEOID').placename.to_dict()
+countydict = counties.reset_index().sort_values(['state_abbrev','placename']).set_index('geoid').placename.to_dict()
 
 # =============================================================================
 # Getting the Age + Race DataFrame for Display and the summary stats table
 # =============================================================================
-agerace = df.set_index('county_geoid').loc[:,agerace_dict.keys()]
-agerace.columns = pd.MultiIndex.from_tuples(
-    [agerace_dict[ii] for ii in agerace.columns],
-    names=['race','age']
-)
-
-agerace = agerace.rename(columns=agerace_dict).stack().stack()
-total_all = agerace.groupby('county_geoid').sum()
-agerace = agerace.unstack('race')
-agerace.loc[:,'Total'] = agerace.sum(axis=1,skipna=True)
-agerace = agerace.stack().unstack('age')
-agerace.loc[:,'Total'] = agerace.sum(axis=1,skipna=True)
 
 # making the default table for display
-default_agerace_table = pd.DataFrame(list(agerace.index.get_level_values('race').unique()),
-                                     columns=['Reg. Race/Age'])
-for ii in agerace.columns:
+default_agerace_table = pd.DataFrame(list(unreg.index.get_level_values('race').unique()),
+                                     columns=['Unreg. Race/Age'])
+for ii in unreg.columns:
     default_agerace_table.loc[:,ii] = np.nan*len(default_agerace_table)
 
-
 ### Again but for the summary table that is always on display
-sumtab = df.set_index('county_geoid').loc[:,sum_table_cols.keys()]
+sumtab = counties.loc[:,sum_table_cols.keys()]
 sumtab.columns = sum_table_cols.values()
 for ii in sumtab.columns:
-    if 'Fraction' in ii:
+    if 'Fraction' in ii or 'Rate' in ii:
         sumtab.loc[:,ii] = sumtab.loc[:,ii].apply(fixpct)
     elif 'Margin' in ii:
         pass
-    elif ii in ['Registered','Unregistered']:
+    elif ii in ['Registered','Unregistered','Population']:
         sumtab.loc[:,ii] = sumtab.loc[:,ii].apply(lambda x: fixlab(x))
     else:
         sumtab.loc[:,ii] = sumtab.loc[:,ii].apply(lambda x: fixlab(x,2))
@@ -243,38 +217,38 @@ default_sum_table = pd.DataFrame(zip(sumtab.columns,[np.nan]*(len(sumtab.columns
 # =============================================================================
 
 # run the first time:
-if first_time:
-    states = counties.copy()
-    states.loc[:,'statepop'] = states.groupby('state_abbrev').pop2012.transform(sum)
+# if first_time:
+#     states = counties.copy()
+#     states.loc[:,'statepop'] = states.groupby('state_abbrev').pop2012.transform(sum)
+#
+#     for ii in partisan_scores.values():
+#         states.loc[:,ii] = states.loc[:,ii]*(states.pop2012/states.statepop)
+#
+#     states = states.dissolve('state_abbrev',aggfunc='sum')
+#     states.to_file(os.path.join('data','states_shapefile.geojson'),driver='GeoJSON')
+# else:
+#     states = gpd.read_file(os.path.join('data','states_shapefile.geojson'))
+#     states = states.set_index('state_abbrev')
 
-    for ii in partisan_scores.values():
-        states.loc[:,ii] = states.loc[:,ii]*(states.pop2012/states.statepop)
 
-    states = states.dissolve('state_abbrev',aggfunc='sum')
-    states.to_file(os.path.join('data','states_shapefile.geojson'),driver='GeoJSON')
-else:
-    states = gpd.read_file(os.path.join('data','states_shapefile.geojson'))
-    states = states.set_index('state_abbrev')
-
-
-states.loc[:,'placename'] = states.index.map(
-    state_names.set_index('state_abbrev').state_name.to_dict()
-    ) # get the state names for graphing later
+# states.loc[:,'placename'] = states.index.map(
+#     state_names.set_index('state_abbrev').state_name.to_dict()
+#     ) # get the state names for graphing later
 
 for ii in partisan_scores.values():
     counties.loc[:,'{}_rank'.format(ii)] = counties.loc[:,ii].rank(pct=True)
-    states.loc[:,'{}_rank'.format(ii)] = states.loc[:,ii].rank(pct=True)
+    #states.loc[:,'{}_rank'.format(ii)] = states.loc[:,ii].rank(pct=True)
 
-states = states.assign(clicktype='state')
+#states = states.assign(clicktype='state')
 
 # merging in the presidential data into the states
-states = states.join(
-    presdat.loc[presdat.state,:].assign(
-        state_abbrev=presdat.fips.map(state_names.set_index('state_fips').state_abbrev.to_dict())
-    ).set_index('state_abbrev').filter(regex='pres')
-)
+# states = states.join(
+#     presdat.loc[presdat.state,:].assign(
+#         state_abbrev=presdat.fips.map(state_names.set_index('state_fips').state_abbrev.to_dict())
+#     ).set_index('state_abbrev').filter(regex='pres')
+# )
 
-statedict = states.placename.to_dict()
+#statedict = states.placename.to_dict()
 
 
 # get all the ones that matched
@@ -334,7 +308,7 @@ projects = projects.assign(clicktype='project')
 
 
 projects.loc[:,'placename'] = (
-    projects.loc[:,'County or Parish'].str.strip().str.title() + ', ' + 
+    projects.loc[:,'County or Parish'].str.strip().str.title() + ', ' +
     projects.State.str.strip().str.upper()
     )
 
@@ -436,6 +410,14 @@ statedropdown = (
 # get the centers of each state in the dataframe that way we can navigate accordingly from dropdown
 
 if first_time:
+    states = counties.copy()
+    states.loc[:,'statepop'] = states.groupby('state_abbrev').pop2012.transform(sum)
+
+    for ii in partisan_scores.values():
+        states.loc[:,ii] = states.loc[:,ii]*(states.pop2012/states.statepop)
+
+    states = states.dissolve('state_abbrev',aggfunc='sum')
+    states.to_file(os.path.join('data','states_shapefile.geojson'),driver='GeoJSON')
     statecenters = states.centroid.apply(lambda x: {"lat": x.y, "lon": x.x}).to_dict()
 else:
     # this is better to hardcode for speed, otherwise you can generate it from above.
@@ -520,19 +502,21 @@ selector_col = html.Div(
     [
         html.H4(children='High Impact Local Projects and Voter Information'),
         html.P('''
-            The map shades partisanship rank measures. Click or select a state to see a
-            county breakdown. Darker shaded dots represent local fossil fuel projects with more CO2e.
+            The map shades partisanship rank measures.
+            Click on a county to see estimated voter registration information.
+            Estimates on unregistered are made conservatively and may not reflect accurate voter counts.
+            Darker shaded dots represent local fossil fuel projects with more CO2e.
             Browse specific counties or projects by clicking map or selecting from dropdowns.
             A full list of projects is below.
             '''
         ),
-        html.Label('Location'),
-        dcc.Dropdown(
-            id='location',
-            options=statedropdown,
-            value='US',
-            clearable=False
-        ),
+        # html.Label('Location'),
+        # dcc.Dropdown(
+        #     id='location',
+        #     options=statedropdown,
+        #     value='US',
+        #     clearable=False
+        # ),
         html.Br(),
         # html.Label('Geographic Unit'),
         # dcc.Dropdown(
@@ -816,18 +800,20 @@ app.layout = html.Div(
 @app.callback(
     Output("choropleth", "figure"),
     Input("measure", "value"),
-    Input("location","value")
+    #Input("location","value")
     )
-def display_choropleth(measure,location):
-    if location == 'US':
-        plotdf = states # df
-        zoom = 3
-        center = {"lat": 37.0902, "lon": -95.7129}
-    else:
-        plotdf = counties.loc[counties.state_abbrev.eq(location),:]
-        zoom = sizerank[location]
-        center = statecenters[location]
-
+def display_choropleth(measure): #,location):
+    plotdf = counties
+    zoom = 3
+    center = {"lat": 37.0902, "lon": -95.7129}
+    # if location == 'US':
+    #     # plotdf = counties # states # df
+    #     zoom = 3
+    #     center = {"lat": 37.0902, "lon": -95.7129}
+    # else:
+    #     # plotdf = #counties.loc[counties.state_abbrev.eq(location),:]
+    #     #zoom = sizerank[location]
+    #     #center = statecenters[location]
     fig = px.choropleth_mapbox(plotdf,
                                geojson=plotdf.geometry,
                                locations=plotdf.index,
@@ -846,7 +832,9 @@ def display_choropleth(measure,location):
                           )
     fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0},
                       plot_bgcolor='rgba(0, 0, 0, 0)',
-                      paper_bgcolor='rgba(0, 0, 0, 0)')
+                      paper_bgcolor='rgba(0, 0, 0, 0)',
+                      uirevision=True
+                      )
     fig.update_traces(
         hovertemplate='<b>%{customdata[1]}</b><br><i>Value:</i> %{customdata[2]}<br>'
         )
@@ -947,17 +935,17 @@ def update_agerace_table(name,freqtype):
     if not name:
         return default_agerace_table.to_dict('records'),default_sum_table.to_dict('records')
     if freqtype=='count':
-        data = (agerace.loc[name]
-                       .applymap(fixlab)
+        data = (unreg.loc[name]
+                       .applymap(fixnum)
                        .reset_index()
-                       .rename(columns={'race':'Reg. Race/Age'})
+                       .rename(columns={'race':'Unreg. Race/Age'})
                 )
     else:
-        data = (agerace.loc[name]
-                       .divide(total_all.loc[name]) # the total groupby from above
+        data = (unreg.loc[name]
+                       .divide(unreg.loc[pd.IndexSlice[name,'Total'],'Total']) # the total groupby from above
                        .applymap(fixpct)
                        .reset_index()
-                       .rename(columns={'race':'Reg. Race/Age'})
+                       .rename(columns={'race':'Unreg. Race/Age'})
                 )
     # getting the summary stats for the other table
     sumdata = sumtab.loc[name].to_frame().reset_index()
